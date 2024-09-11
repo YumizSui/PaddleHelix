@@ -55,7 +55,7 @@ DISPLAY_RESULTS_KEYS = [
     'iptm',
     'ptm',
     'ranking_confidence',
-    'has_clash', 
+    'has_clash',
     'mean_plddt',
 ]
 
@@ -74,13 +74,13 @@ def init_seed(seed):
 def batch_convert(np_array, add_batch=True):
     np_type = {}
     other_type = {}
-    # 
+    #
     for key, value in np_array.items():
         if type(value) == np.ndarray:
             np_type.update(utils.map_to_tensor({key: value}, add_batch=add_batch))
         else:
             other_type[key] = [value]  ## other type shoule be list.
-    
+
     return {**np_type, **other_type}
 
 def preprocess_json_entity(json_path, out_dir):
@@ -89,7 +89,7 @@ def preprocess_json_entity(json_path, out_dir):
         raise ValueError("The json file does not contain any valid entity.")
     else:
         logger.info("The json file contains %d valid entity.", len(all_entitys))
-    
+
     return all_entitys
 
 def convert_to_json_compatible(obj):
@@ -105,7 +105,7 @@ def convert_to_json_compatible(obj):
         return [convert_to_json_compatible(i) for i in obj]
     else:
         return obj
-    
+
 def get_msa_templates_pipeline(args) -> Dict:
     use_precomputed_msas = True # FLAGS.use_precomputed_msas
     template_searcher = hmmsearch.Hmmsearch(
@@ -145,9 +145,9 @@ def get_msa_templates_pipeline(args) -> Dict:
       hmmer_binary_path=args.nhmmer_binary_path,
       rfam_database_path=args.rfam_database_path,
       rnacentral_database_path=None,
-      nt_database_path=None,     
+      nt_database_path=None,
       species_identifer_map_path=None,
-      use_precomputed_msas=use_precomputed_msas)  
+      use_precomputed_msas=use_precomputed_msas)
 
     rna_data_pipeline = pipeline_rna_multimer.RNADataPipeline(
       monomer_data_pipeline=rna_monomer_data_pipeline)
@@ -168,39 +168,50 @@ def ranking_all_predictions(output_dirs):
     rank_id = 1
     for outpath, rank_score in ranked_map.items():
         logger.debug("[ranking_all_predictions] Ranking score of %s: %.5f", outpath, rank_score)
-        basename_prefix = os.path.basename(outpath).split('-pred-')[0]
-        target_path = os.path.join(os.path.dirname(outpath), f'{basename_prefix}-rank{rank_id}')
+        basename = os.path.basename(outpath)
+        job_name = f'{basename}-rank{rank_id}'
+        target_path = os.path.join(os.path.dirname(outpath), job_name)
         if os.path.exists(target_path) and os.path.isdir(target_path):
             shutil.rmtree(target_path)
         shutil.copytree(outpath, target_path)
+        # rename job_name to include rank_id
+        # cif_path = os.path.join(target_path, f'{basename}.cif')
+        # os.rename(cif_path, os.path.join(target_path, f'{job_name}.cif'))
+        # pdb_path = os.path.join(target_path, f'{basename}.pdb')
+        # os.rename(pdb_path, os.path.join(target_path, f'{job_name}.pdb'))
+
+
         rank_id += 1
+    # remove all output dirs
+    for outpath in output_dirs:
+        shutil.rmtree(outpath)
 
 @paddle.no_grad()
 def eval(args, model, batch):
     """evaluate a given dataset"""
-    model.eval()       
-        
+    model.eval()
+
     # inference
     def _forward_with_precision(batch):
         if args.precision == "bf16" or args.bf16_infer:
             black_list, white_list = get_custom_amp_list()
             with paddle.amp.auto_cast(enable=True,
-                                        custom_white_list=white_list, 
-                                        custom_black_list=black_list, 
-                                        level=args.amp_level, 
+                                        custom_white_list=white_list,
+                                        custom_black_list=black_list,
+                                        level=args.amp_level,
                                         dtype='bfloat16'):
                 return model(batch, compute_loss=False)
         elif args.precision == "fp32":
             return model(batch, compute_loss=False)
         else:
             raise ValueError("Please choose precision from bf16 and fp32! ")
-        
+
     res = _forward_with_precision(batch)
     logger.info(f"Inference Succeeds...\n")
     return res
 
 
-def postprocess_fn(entry_name, batch, results, output_dir, maxit_binary=None):
+def postprocess_fn(entry_name, job_name, batch, results, output_dir, maxit_binary=None):
     """
         postprocess function for HF3 output.
             - batch. input data
@@ -242,7 +253,7 @@ def postprocess_fn(entry_name, batch, results, output_dir, maxit_binary=None):
         "mask": batch['label']['all_atom_pos_mask'].numpy(),
     }
 
-    atom_mask = np.logical_and(pred_dict["mask"] > 0, 
+    atom_mask = np.logical_and(pred_dict["mask"] > 0,
                 exp_dict["mask"] > 0)[0]  # [N_atom]
     token_mask = batch['label']['all_centra_token_indice_mask'][0].numpy().astype('bool')
     # tensor to numpy
@@ -261,18 +272,18 @@ def postprocess_fn(entry_name, batch, results, output_dir, maxit_binary=None):
             return val[atom_mask]
         else:
             if key in ['token_bonds_type']:
-                return val[token_mask, :][:, token_mask] 
+                return val[token_mask, :][:, token_mask]
             return val[token_mask]
     common_feat_masked = {k: apply_mask(k, v) for k, v in common_feat.items()}
 
-    ## save prediction masked 
-    pred_cif_path = f'{output_dir}/predicted_structure.cif'
+    ## save prediction masked
+    pred_cif_path = f'{output_dir}/{job_name}.cif'
     all_atom_pdb_save.prediction_to_mmcif(
-        pred_dict["pos"][0][atom_mask], 
-        common_feat_masked, 
-        maxit_binary=maxit_binary, 
+        pred_dict["pos"][0][atom_mask],
+        common_feat_masked,
+        maxit_binary=maxit_binary,
         mmcif_path=pred_cif_path)
-    
+
     assert os.path.exists(pred_cif_path),\
               (f"pred: {pred_cif_path} not exists! please check it")
 
@@ -281,16 +292,16 @@ def postprocess_fn(entry_name, batch, results, output_dir, maxit_binary=None):
     ## 1. license
     extra_infos = {'entry_id': entry_name, "global_plddt": float(confidence_results['mean_plddt'])}
     mmcif_writer.mmcif_meta_append(pred_cif_path, extra_infos)
-    
+
     ## 2. post add ligand bond type;
     ## N_token, for ligand, N_token == N_atom
     ref_token2atom_idx = common_feat_masked['ref_token2atom_idx']
     is_ligand = common_feat_masked['is_ligand'].astype(bool) # N_token
     perm_is_ligand = is_ligand[ref_token2atom_idx].astype(bool)
-    
+
     ccd_ids = common_feat_masked['all_ccd_ids'] # N_atom
     atom_ids = common_feat_masked['all_atom_ids'] # N_atom
-    token_bond_type = common_feat_masked['token_bonds_type'] # N_token 
+    token_bond_type = common_feat_masked['token_bonds_type'] # N_token
     bond_mat = token_bond_type[ref_token2atom_idx][:, ref_token2atom_idx] # N_token -> N_atom
     ligand_bond_type = bond_mat[perm_is_ligand][:, perm_is_ligand]
     index1, index2 = np.nonzero(ligand_bond_type)
@@ -298,8 +309,8 @@ def postprocess_fn(entry_name, batch, results, output_dir, maxit_binary=None):
     ligand_atom_ids = atom_ids[perm_is_ligand]
     ligand_ccd_ids = ccd_ids[perm_is_ligand]
 
-    contexts = {'_chem_comp_bond.comp_id': [], 
-                '_chem_comp_bond.atom_id_1': [], 
+    contexts = {'_chem_comp_bond.comp_id': [],
+                '_chem_comp_bond.atom_id_1': [],
                 '_chem_comp_bond.atom_id_2 ': [],
                 '_chem_comp_bond.value_order': []}
     for idx, (i, j, bd_type) in enumerate(bonds):
@@ -318,8 +329,8 @@ def get_display_results(batch, results):
     confidence_score_names = ['atom_plddts', 'pae']
     ## atom_plddts: [N_atom], pae: [N_token, N_token]
     required_atom_level_keys = atom_level_keys + ['atom_plddts']
-    display_required_keys = ['all_ccd_ids', 'all_atom_ids', 
-                            'ref_token2atom_idx', 'restype', 
+    display_required_keys = ['all_ccd_ids', 'all_atom_ids',
+                            'ref_token2atom_idx', 'restype',
                             'residue_index', 'asym_id',
                             'all_atom_pos_mask',]
     all_results = {k: [] for k in DISPLAY_RESULTS_KEYS}
@@ -371,7 +382,7 @@ def get_display_results(batch, results):
             return val[atom_mask]
         else:
             if key in ['token_bonds_type', 'pae']:
-                return val[token_mask, :][:, token_mask] 
+                return val[token_mask, :][:, token_mask]
             return val[token_mask]
     common_feat_masked = {k: apply_mask(k, v) for k, v in common_feat.items()}
 
@@ -393,40 +404,41 @@ def get_display_results(batch, results):
     return all_results
 
 
-def save_result(entry_name, feature_dict, prediction, output_dir, maxit_bin):
+def save_result(entry_name, job_name, feature_dict, prediction, output_dir, maxit_bin):
     postprocess_fn(entry_name=entry_name,
-                    batch=feature_dict, 
+                   job_name=job_name,
+                    batch=feature_dict,
                     results=prediction,
                     output_dir=output_dir,
                     maxit_binary=maxit_bin)
-    
+
     all_results = {k: [] for k in DISPLAY_RESULTS_KEYS}
     res = get_display_results(batch=feature_dict,results=prediction)
-    
+
     for k in all_results:
         if k in res:
             all_results[k] = convert_to_json_compatible(res[k])
 
     with open(output_dir.joinpath('all_results.json'), 'w') as f:
         f.write(json.dumps(all_results, indent=4))
-    
-    root_path = os.path.dirname(os.path.abspath(__file__))
-    shutil.copyfile(pathlib.Path(root_path).joinpath('LICENSE'), output_dir.joinpath('terms_of_use.md'))
+
+    # root_path = os.path.dirname(os.path.abspath(__file__))
+    # shutil.copyfile(pathlib.Path(root_path).joinpath('LICENSE'), output_dir.joinpath('terms_of_use.md'))
 
 def split_prediction(pred, rank):
     prediction = []
     feat_key_list = [pred[rk].keys() for rk in RETURN_KEYS]
     feat_key_table = dict(zip(RETURN_KEYS, feat_key_list))
-    
+
     for i in range(rank):
         sub_pred = {}
         for rk in RETURN_KEYS:
             feat_keys = feat_key_table[rk]
             sub_feat = dict(zip(feat_keys, [pred[rk][fk][:, i] for fk in feat_keys]))
             sub_pred[rk] = sub_feat
-    
+
         prediction.append(sub_pred)
-    
+
     return prediction
 
 
@@ -465,7 +477,7 @@ def main(args):
 
     logger.info('Getting MSA/Template Pipelines...')
     msa_templ_data_pipeline_dict = get_msa_templates_pipeline(args)
-        
+
 
     ### create model
     model_config = config.model_config(args.model_name)
@@ -476,13 +488,13 @@ def main(args):
     if (not args.init_model is None) and (not args.init_model == ""):
         print(f"Load pretrain model from {args.init_model}")
         pd_params = paddle.load(args.init_model)
-        
+
         has_opt = 'optimizer' in pd_params
         if has_opt:
             model.helixfold.set_state_dict(pd_params['model'])
         else:
             model.helixfold.set_state_dict(pd_params)
-    
+
     if args.precision == "bf16" and args.amp_level == "O2":
         raise NotImplementedError("bf16 O2 is not supported yet.")
 
@@ -493,46 +505,51 @@ def main(args):
     msa_output_dir.mkdir(parents=True, exist_ok=True)
 
     features_pkl = output_dir_base.joinpath('final_features.pkl')
-    feature_dict = feature_processing_aa.process_input_json(
-                    all_entitys, 
-                    ccd_preprocessed_path=args.ccd_preprocessed_path,
-                    msa_templ_data_pipeline_dict=msa_templ_data_pipeline_dict,
-                    msa_output_dir=msa_output_dir)
+    if os.path.exists(features_pkl):
+        with open(features_pkl, 'rb') as f:
+            feature_dict = pickle.load(f)
+    else:
+        feature_dict = feature_processing_aa.process_input_json(
+                        all_entitys,
+                        ccd_preprocessed_path=args.ccd_preprocessed_path,
+                        msa_templ_data_pipeline_dict=msa_templ_data_pipeline_dict,
+                        msa_output_dir=msa_output_dir)
 
-    # save features
-    with open(features_pkl, 'wb') as f:
-        pickle.dump(feature_dict, f, protocol=4)
+        # save features
+        with open(features_pkl, 'wb') as f:
+            pickle.dump(feature_dict, f, protocol=4)
 
     feature_dict['feat'] = batch_convert(feature_dict['feat'], add_batch=True)
     feature_dict['label'] = batch_convert(feature_dict['label'], add_batch=True)
-    
+
     print(f"============ Start Inference ============")
-    
+
     infer_times = args.infer_times
     if args.diff_batch_size > 0:
         model_config.model.heads.diffusion_module.test_diff_batch_size = args.diff_batch_size
-    diff_batch_size = model_config.model.heads.diffusion_module.test_diff_batch_size 
+    diff_batch_size = model_config.model.heads.diffusion_module.test_diff_batch_size
     logger.info(f'Inference {infer_times} Times...')
     logger.info(f" diffusion batch size {diff_batch_size}...\n")
     all_pred_path = []
     for infer_id in range(infer_times):
-        
+
         logger.info(f'Start {infer_id}-th inference...\n')
         prediction = eval(args, model, feature_dict)
-        
+
         # save result
         prediction = split_prediction(prediction, diff_batch_size)
         for rank_id in range(diff_batch_size):
-            json_name = job_base + f'-pred-{str(infer_id + 1)}-{str(rank_id + 1)}'
-            output_dir = pathlib.Path(output_dir_base).joinpath(json_name)
+            job_name = job_base + f'-pred-{str(infer_id + 1)}-{str(rank_id + 1)}'
+            output_dir = pathlib.Path(output_dir_base).joinpath(job_name)
             output_dir.mkdir(parents=True, exist_ok=True)
             save_result(entry_name=job_base,
+                        job_name=job_name,
                         feature_dict=feature_dict,
                         prediction=prediction[rank_id],
-                        output_dir=output_dir, 
+                        output_dir=output_dir,
                         maxit_bin=args.maxit_binary)
             all_pred_path.append(output_dir)
-    
+
     # final ranking
     print(f'============ Ranking ! ============')
     ranking_all_predictions(all_pred_path)
@@ -583,7 +600,7 @@ if __name__ == '__main__':
     parser.add_argument('--nhmmer_binary_path', type=str,
                         default='/usr/bin/nhmmer',
                         help='Path to the nhmmer executable.')
-    
+
     parser.add_argument('--uniprot_database_path', type=str,
                         default=None, required=True,
                         help='Path to the Uniprot database for use '

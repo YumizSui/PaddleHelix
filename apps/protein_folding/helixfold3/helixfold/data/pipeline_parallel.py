@@ -111,10 +111,10 @@ def run_msa_tool(msa_runner, input_fasta_path: str, msa_out_path: str,
 def run_msa_tool_wrapper(args):
     """
     用于包装run_msa_tool函数的帮助程序，以便在使用argparse时可以更轻松地传递参数。
-    
+
     Args:
         args (tuple, list): 一个元组或列表，其中包含要传递给run_msa_tool函数的参数。
-    
+
     Returns:
         int: 返回run_msa_tool函数的返回值。
     """
@@ -198,10 +198,10 @@ class DataPipeline:
         msa_format='sto',
         use_precomputed_msas=self.use_precomputed_msas,
         max_sto_sequences=self.mgnify_max_hits)"""
-    msa_tasks.append((self.jackhmmer_mgnify_runner,                                                                                                     
-           input_fasta_path,                                                                                                                    
-           os.path.join(msa_output_dir, 'mgnify_hits.sto'),                                                                                  
-           'sto',                                                                                                                               
+    msa_tasks.append((self.jackhmmer_mgnify_runner,
+           input_fasta_path,
+           os.path.join(msa_output_dir, 'mgnify_hits.sto'),
+           'sto',
            self.use_precomputed_msas))
 
     if self._use_small_bfd:
@@ -219,10 +219,10 @@ class DataPipeline:
           'a3m',
           self.use_precomputed_msas))
 
-    msa_results = {}  
+    msa_results = {}
     with ProcessPoolExecutor() as executor:
       futures = {executor.submit(run_msa_tool_wrapper, msa_task): msa_task for msa_task in msa_tasks}
-  
+
       for future in as_completed(futures):
         task = futures[future]
         try:
@@ -266,7 +266,8 @@ class DataPipeline:
     if self._use_small_bfd:
         bfd_msa = parsers.parse_stockholm(msa_results['small_bfd']['sto'])
     else:
-        raise ValueError("Doesn't support full BFD yet.")
+        # raise ValueError("Doesn't support full BFD yet.")
+        bfd_msa = parsers.parse_a3m(msa_results['bfd_uniclust']['a3m'])
 
     templates_result = self.template_featurizer.get_templates(
         query_sequence=input_sequence,

@@ -118,11 +118,12 @@ def process_with_all_chain_features(
   # check if protein is homonmer with unique sequence
   input_seqs = set()
   for chain_id, chain_features in all_chain_features.items():
+    print("DEBUG: chain_features", chain_features.keys())
     input_seqs.add(str(chain_features["sequence"]))
   is_homomer_or_monomer = len(set(input_seqs)) == 1
-  
+
   for chain_id, chain_features in all_chain_features.items():
-    if is_homomer_or_monomer: 
+    if is_homomer_or_monomer:
       # delete keys with _all_seq if is_homomer_or_monomer
       key_list = list(chain_features.keys())
       for key in key_list:
